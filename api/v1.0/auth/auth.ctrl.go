@@ -2,19 +2,16 @@ package auth
 
 import (
 	"fmt"
-	"io/ioutil"
-	"os"
 	"time"
 
-	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/gorm"
 	"github.com/velopert/gin-rest-api-sample/database/models"
 	"github.com/velopert/gin-rest-api-sample/lib/common"
+	"github.com/velopert/gin-rest-api-sample/lib/middlewares"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// User is alias for models.User
 type User = models.User
 
 func hash(password string) (string, error) {
@@ -25,28 +22,6 @@ func hash(password string) (string, error) {
 func checkHash(password string, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
-}
-
-func generateToken(data common.JSON) (string, error) {
-
-	//  token is valid for 7days
-	date := time.Now().Add(time.Hour * 24 * 7)
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user": data,
-		"exp":  date.Unix(),
-	})
-
-	// get path from root dir
-	pwd, _ := os.Getwd()
-	keyPath := pwd + "/jwtsecret.key"
-
-	key, readErr := ioutil.ReadFile(keyPath)
-	if readErr != nil {
-		return "", readErr
-	}
-	tokenString, err := token.SignedString(key)
-	return tokenString, err
 }
 
 func register(c *gin.Context) {
@@ -64,7 +39,6 @@ func register(c *gin.Context) {
 		return
 	}
 
-	// check existancy
 	var exists User
 	if err := db.Where("username = ?", body.Username).First(&exists).Error; err == nil {
 		c.AbortWithStatus(409)
@@ -77,7 +51,6 @@ func register(c *gin.Context) {
 		return
 	}
 
-	// create user
 	user := User{
 		Username:     body.Username,
 		DisplayName:  body.DisplayName,
@@ -88,8 +61,8 @@ func register(c *gin.Context) {
 	db.Create(&user)
 
 	serialized := user.Serialize()
-	token, _ := generateToken(serialized)
-	c.SetCookie("token", token, 60*60*24*7, "/", "", false, true)
+	token, _ := middlewares.GenerateToken(serialized)
+	c.SetCookie("token", token, 60*60*24, "/", "", false, true)
 
 	c.JSON(200, common.JSON{
 		"user":  user.Serialize(),
@@ -110,10 +83,9 @@ func login(c *gin.Context) {
 		return
 	}
 
-	// check existancy
 	var user User
 	if err := db.Where("username = ?", body.Username).First(&user).Error; err != nil {
-		c.AbortWithStatus(404) // user not found
+		c.AbortWithStatus(404)
 		return
 	}
 
@@ -123,9 +95,9 @@ func login(c *gin.Context) {
 	}
 
 	serialized := user.Serialize()
-	token, _ := generateToken(serialized)
+	token, _ := middlewares.GenerateToken(serialized)
 
-	c.SetCookie("token", token, 60*60*24*7, "/", "", false, true)
+	c.SetCookie("token", token, 60*60*24, "/", "", false, true)
 
 	c.JSON(200, common.JSON{
 		"user":  user.Serialize(),
@@ -133,7 +105,6 @@ func login(c *gin.Context) {
 	})
 }
 
-// check API will renew token when token life is less than 3 days, otherwise, return null for token
 func check(c *gin.Context) {
 	userRaw, ok := c.Get("user")
 	if !ok {
@@ -143,15 +114,20 @@ func check(c *gin.Context) {
 
 	user := userRaw.(User)
 
-	tokenExpire := int64(c.MustGet("token_expire").(float64))
+	tokenExpireRaw, ok := c.Get("token_expire")
+	if !ok {
+		c.AbortWithStatus(401)
+		return
+	}
+
+	tokenExpire := tokenExpireRaw.(int64)
 	now := time.Now().Unix()
 	diff := tokenExpire - now
 
 	fmt.Println(diff)
-	if diff < 60*60*24*3 {
-		// renew token
-		token, _ := generateToken(user.Serialize())
-		c.SetCookie("token", token, 60*60*24*7, "/", "", false, true)
+	if diff < 60*60*12 {
+		token, _ := middlewares.GenerateToken(user.Serialize())
+		c.SetCookie("token", token, 60*60*24, "/", "", false, true)
 		c.JSON(200, common.JSON{
 			"token": token,
 			"user":  user.Serialize(),
