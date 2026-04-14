@@ -108,7 +108,7 @@ func JWTMiddleware() gin.HandlerFunc {
 	}
 }
 
-func generateToken(data common.JSON) (string, error) {
+func GenerateToken(data common.JSON) (string, error) {
 	date := time.Now().Add(time.Hour * 24)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
